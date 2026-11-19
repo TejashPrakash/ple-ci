@@ -79,7 +79,8 @@ jobs:
     name: build + serve + listen (Docker, needs a model)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    if: ${{ vars.PLE_MODEL_BASE_URL != '' }}
+    # only on push: a dispatch exists to run dev tasks, not to redo this
+    if: ${{ vars.PLE_MODEL_BASE_URL != '' && github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,7 +142,7 @@ jobs:
     name: grade the committed artifacts (2 zero-artifact tasks)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    if: ${{ vars.PLE_MODEL_BASE_URL != '' }}
+    if: ${{ vars.PLE_MODEL_BASE_URL != '' && github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
         with:

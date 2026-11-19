@@ -34,6 +34,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.ENTRY_REPO }}
+          # full history: the kit clones the entry with --no-local, and a
+          # depth-1 checkout makes git try to re-fetch missing objects
+          fetch-depth: 0
           path: entry
 
       - name: Check out the competition kit at the pinned commit
@@ -71,6 +74,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENTRY_REPO }}
+          # full history: the kit clones the entry with --no-local, and a
+          # depth-1 checkout makes git try to re-fetch missing objects
+          fetch-depth: 0
           path: entry
 
       - uses: actions/checkout@v4
@@ -130,6 +136,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENTRY_REPO }}
+          # full history: the kit clones the entry with --no-local, and a
+          # depth-1 checkout makes git try to re-fetch missing objects
+          fetch-depth: 0
           path: entry
 
       - uses: actions/checkout@v4
@@ -195,6 +204,7 @@ jobs:
         with:
           repository: ${{ env.ENTRY_REPO }}
           ref: ${{ github.event.inputs.entry_ref || 'main' }}
+          fetch-depth: 0
           path: entry
 
       - uses: actions/checkout@v4

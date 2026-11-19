@@ -1,34 +1,42 @@
-# Runs the PLE submission kit on GitHub's machines, not on the laptop.
-#
-# Why this exists: the kit is Linux-only (kit/build.py imports fcntl) and one
-# dev-set slot needs 6 CPUs / 16.25 GB. The local machine has 8.5 GB, so all
-# Docker work happens here instead. ubuntu-latest gives us 4 vCPU / 16 GB.
-#
-# Stages that need no model credentials run on every push. The Docker stages
-# (build, listen, smoke) need a model the kit can call; they run only when the
-# OPENAI_COMPAT_* secrets are set, and against a copy of submission.yaml whose
-# model_api is switched to openai-compatible so the kit will accept it.
+name: PLE kit
 
-name: ple-kit
-
+# Runs where the RAM is: the entry itself is a separate repo (ple-entry), the
+# competition kit is pinned, and no secret ever lands inside the entry.
 on:
   push:
   workflow_dispatch:
+    inputs:
+      tasks:
+        description: "comma-separated dev task ids for the model run (empty = skip)"
+        required: false
+        default: ""
+      model_name:
+        description: "model id served by PLE_MODEL_BASE_URL"
+        required: false
+        default: "openai/gpt-oss-120b"
+
+env:
+  KIT_REPO: google-research/ple
+  KIT_REF: 8320f0402fdca9f42476607f72bcfd5271cd50c9
+  ENTRY_REPO: TejashPrakash/ple-entry
 
 jobs:
   static:
     name: submission.yaml + artifacts (no Docker)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Check out the entry
         uses: actions/checkout@v4
         with:
+          repository: ${{ env.ENTRY_REPO }}
           path: entry
 
       - name: Check out the competition kit at the pinned commit
         uses: actions/checkout@v4
         with:
-          repository: google-research/ple
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
           path: comp
 
       - uses: astral-sh/setup-uv@v5
@@ -51,22 +59,31 @@ jobs:
         run: uv run python -m kit artifacts ../entry
 
   harness:
-    name: build + serve + smoke (Docker, needs a model)
+    name: build + serve + listen (Docker, needs a model)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     if: ${{ vars.PLE_MODEL_BASE_URL != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: ${{ env.ENTRY_REPO }}
           path: entry
 
       - uses: actions/checkout@v4
         with:
-          repository: google-research/ple
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
           path: comp
 
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
 
       - name: Install the kit
         working-directory: comp
@@ -74,26 +91,188 @@ jobs:
 
       - name: Point the entry at the CI model
         working-directory: entry
+        env:
+          PLE_MODEL_NAME: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
+          PLE_MODEL_BASE_URL: ${{ vars.PLE_MODEL_BASE_URL }}
         run: |
-          python3 - "$PLE_MODEL_NAME" <<'PY'
-          import re, sys, pathlib
+          python3 - <<'PY'
+          import os, re, pathlib
+          model = os.environ["PLE_MODEL_NAME"]
+          base = os.environ["PLE_MODEL_BASE_URL"]
           p = pathlib.Path("submission.yaml")
           s = p.read_text()
-          s = re.sub(r"(?m)^model_api:.*$", f"model_api: openai-compatible/{sys.argv[1]}", s)
-          if "model_base_url:" not in s:
-              s = s.replace(
-                  f"model_api: openai-compatible/{sys.argv[1]}",
-                  f"model_api: openai-compatible/{sys.argv[1]}\nmodel_base_url: \"{__import__('os').environ['PLE_MODEL_BASE_URL']}\"",
-              )
+          s = re.sub(r"(?m)^model_api:.*$", f"model_api: openai-compatible/{model}", s)
+          s = re.sub(r"(?m)^model_base_url:.*$", "", s)
+          s = s.replace(f"model_api: openai-compatible/{model}",
+                        f"model_api: openai-compatible/{model}\nmodel_base_url: \"{base}\"")
           p.write_text(s)
           print(s)
           PY
-        env:
-          PLE_MODEL_NAME: ${{ vars.PLE_MODEL_NAME }}
-          PLE_MODEL_BASE_URL: ${{ vars.PLE_MODEL_BASE_URL }}
 
       - name: kit check
         working-directory: comp
         env:
           MODEL_API_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
-        run: uv run python -m kit check ../entry --no-smoke --rebuild
+        run: |
+          printf 'MODEL_API_KEY=%s\n' "$MODEL_API_KEY" > ci.env
+          uv run python -m kit check ../entry --no-smoke --rebuild --env-file ci.env
+
+  grade-artifacts:
+    name: grade the committed artifacts (2 zero-artifact tasks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: ${{ vars.PLE_MODEL_BASE_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENTRY_REPO }}
+          path: entry
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: comp
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Install the kit and Harbor
+        working-directory: comp
+        run: |
+          uv sync --python 3.12
+          uv tool install harbor==0.20.0 --with websockets
+
+      - name: CI env file (kept outside the entry)
+        working-directory: comp
+        env:
+          MODEL_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
+          HF: ${{ secrets.HF_TOKEN }}
+          BASE: ${{ vars.PLE_MODEL_BASE_URL }}
+          MODEL: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
+        run: |
+          {
+            echo "HF_TOKEN=$HF"
+            echo "JUDGE_BASE_URL=$BASE"
+            echo "JUDGE_API_KEY=$MODEL_KEY"
+            echo "JUDGE_MODEL=$MODEL"
+          } > ci.env
+
+      - name: eval --artifacts on the two tasks that shipped nothing
+        working-directory: comp
+        run: |
+          uv run python eval/run.py --artifacts ../entry --env-file ci.env \
+            --tasks foundation-strategy,solar-witness-test-package --attempts 1
+
+      - name: Summarise
+        if: always()
+        working-directory: comp
+        run: |
+          latest=$(ls -td runs/*/ 2>/dev/null | head -1)
+          echo "run dir: $latest"
+          [ -n "$latest" ] && cat "$latest/results.json" 2>/dev/null | head -c 4000
+          echo
+          grep -iE "score|error|refus|fail" -r "$latest" 2>/dev/null | head -30
+
+  model-run:
+    name: run dev tasks against a free model
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tasks != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENTRY_REPO }}
+          path: entry
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KIT_REPO }}
+          ref: ${{ env.KIT_REF }}
+          path: comp
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Install the kit and Harbor
+        working-directory: comp
+        run: |
+          uv sync --python 3.12
+          uv tool install harbor==0.20.0 --with websockets
+
+      - name: Point the entry at the CI model
+        working-directory: entry
+        env:
+          PLE_MODEL_NAME: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
+          PLE_MODEL_BASE_URL: ${{ vars.PLE_MODEL_BASE_URL }}
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib
+          model = os.environ["PLE_MODEL_NAME"]
+          base = os.environ["PLE_MODEL_BASE_URL"]
+          p = pathlib.Path("submission.yaml")
+          s = p.read_text()
+          s = re.sub(r"(?m)^model_api:.*$", f"model_api: openai-compatible/{model}", s)
+          s = re.sub(r"(?m)^model_base_url:.*$", "", s)
+          s = s.replace(f"model_api: openai-compatible/{model}",
+                        f"model_api: openai-compatible/{model}\nmodel_base_url: \"{base}\"")
+          p.write_text(s)
+          print(s)
+          PY
+
+      - name: CI env file (kept outside the entry)
+        working-directory: comp
+        env:
+          MODEL_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
+          HF: ${{ secrets.HF_TOKEN }}
+          BASE: ${{ vars.PLE_MODEL_BASE_URL }}
+          MODEL: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
+        run: |
+          {
+            echo "MODEL_API_KEY=$MODEL_KEY"
+            echo "HF_TOKEN=$HF"
+            echo "JUDGE_BASE_URL=$BASE"
+            echo "JUDGE_API_KEY=$MODEL_KEY"
+            echo "JUDGE_MODEL=$MODEL"
+          } > ci.env
+
+      - name: eval on the selected tasks
+        working-directory: comp
+        env:
+          TASKS: ${{ github.event.inputs.tasks }}
+        run: |
+          uv run python eval/run.py ../entry --env-file ci.env \
+            --tasks "$TASKS" --attempts 1 --trials 1 --no-export --rebuild
+
+      - name: Summarise
+        if: always()
+        working-directory: comp
+        run: |
+          latest=$(ls -td runs/*/ 2>/dev/null | head -1)
+          echo "run dir: $latest"
+          [ -n "$latest" ] && cat "$latest/results.json" 2>/dev/null | head -c 6000
+
+      - name: Upload run records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ple-run-${{ github.run_id }}
+          path: |
+            comp/runs/**/results.json
+            comp/runs/**/final_message.md
+          retention-days: 14
+          if-no-files-found: warn

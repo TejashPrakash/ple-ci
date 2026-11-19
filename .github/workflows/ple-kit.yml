@@ -136,7 +136,9 @@ jobs:
           MODEL_API_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
         run: |
           printf 'MODEL_API_KEY=%s\n' "$MODEL_API_KEY" > ci.env
-          uv run python -m kit check ../entry --no-smoke --rebuild --env-file ci.env
+          # no --no-smoke: the smoke task is the only place the model is
+          # exercised, and a 4-second zero run says the model never drove it
+          uv run python -m kit check ../entry --rebuild --env-file ci.env
 
   grade-artifacts:
     name: grade the committed artifacts (2 zero-artifact tasks)
@@ -302,5 +304,6 @@ jobs:
           path: |
             comp/runs/**/results.json
             comp/runs/**/final_message.md
+            comp/runs/**/attempt*/harbor.log
           retention-days: 14
           if-no-files-found: warn

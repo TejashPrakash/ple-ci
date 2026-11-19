@@ -18,6 +18,16 @@ on:
         description: "branch of the entry repo to run (main = pristine template)"
         required: false
         default: "main"
+      model_base_url:
+        description: "override PLE_MODEL_BASE_URL for this run (cross-model runs)"
+        required: false
+        default: ""
+      use_alt_key:
+        description: "use PLE_MODEL_API_KEY_ALT instead of PLE_MODEL_API_KEY"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 env:
   KIT_REPO: google-research/ple
@@ -233,12 +243,13 @@ jobs:
         working-directory: entry
         env:
           PLE_MODEL_NAME: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
-          PLE_MODEL_BASE_URL: ${{ vars.PLE_MODEL_BASE_URL }}
+          BASE_OVERRIDE: ${{ github.event.inputs.model_base_url }}
+          VARS_BASE: ${{ vars.PLE_MODEL_BASE_URL }}
         run: |
           python3 - <<'PY'
           import os, re, pathlib
           model = os.environ["PLE_MODEL_NAME"]
-          base = os.environ["PLE_MODEL_BASE_URL"]
+          base = os.environ.get("BASE_OVERRIDE") or os.environ["VARS_BASE"]
           p = pathlib.Path("submission.yaml")
           s = p.read_text()
           s = re.sub(r"(?m)^model_api:.*$", f"model_api: openai-compatible/{model}", s)
@@ -252,15 +263,16 @@ jobs:
       - name: CI env file (kept outside the entry)
         working-directory: comp
         env:
-          MODEL_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
+          MODEL_KEY: ${{ github.event.inputs.use_alt_key == 'true' && secrets.PLE_MODEL_API_KEY_ALT || secrets.PLE_MODEL_API_KEY }}
           HF: ${{ secrets.HF_TOKEN }}
-          BASE: ${{ vars.PLE_MODEL_BASE_URL }}
+          BASE_OVERRIDE: ${{ github.event.inputs.model_base_url }}
+          VARS_BASE: ${{ vars.PLE_MODEL_BASE_URL }}
           MODEL: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
         run: |
           {
             echo "MODEL_API_KEY=$MODEL_KEY"
             echo "HF_TOKEN=$HF"
-            echo "JUDGE_BASE_URL=$BASE"
+            echo "JUDGE_BASE_URL=${BASE_OVERRIDE:-$VARS_BASE}"
             echo "JUDGE_API_KEY=$MODEL_KEY"
             echo "JUDGE_MODEL=$MODEL"
           } > ci.env

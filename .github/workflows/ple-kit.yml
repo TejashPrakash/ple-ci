@@ -23,11 +23,11 @@ on:
         required: false
         default: ""
       use_alt_key:
-        description: "use PLE_MODEL_API_KEY_ALT instead of PLE_MODEL_API_KEY"
+        description: "key to use: false = PLE_MODEL_API_KEY, true = _ALT, groq = _GROQ"
         required: false
         default: "false"
         type: choice
-        options: ["false", "true"]
+        options: ["false", "true", "groq"]
       smoke:
         # model-dependent jobs are dispatch-only: the free tier is 20
         # requests/day, and a push that burns it turns every push red with a
@@ -100,6 +100,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENTRY_REPO }}
+          ref: ${{ github.event.inputs.entry_ref || 'main' }}
           # full history: the kit clones the entry with --no-local, and a
           # depth-1 checkout makes git try to re-fetch missing objects
           fetch-depth: 0
@@ -129,7 +130,7 @@ jobs:
         working-directory: entry
         env:
           PLE_MODEL_NAME: ${{ github.event.inputs.model_name || vars.PLE_MODEL_NAME }}
-          PLE_MODEL_BASE_URL: ${{ vars.PLE_MODEL_BASE_URL }}
+          PLE_MODEL_BASE_URL: ${{ github.event.inputs.model_base_url || vars.PLE_MODEL_BASE_URL }}
         run: |
           python3 - <<'PY'
           import os, re, pathlib
@@ -148,7 +149,7 @@ jobs:
       - name: kit check
         working-directory: comp
         env:
-          MODEL_API_KEY: ${{ secrets.PLE_MODEL_API_KEY }}
+          MODEL_API_KEY: ${{ github.event.inputs.use_alt_key == 'groq' && secrets.PLE_MODEL_API_KEY_GROQ || (github.event.inputs.use_alt_key == 'true' && secrets.PLE_MODEL_API_KEY_ALT || secrets.PLE_MODEL_API_KEY) }}
         run: |
           printf 'MODEL_API_KEY=%s\n' "$MODEL_API_KEY" > ci.env
           # no --no-smoke: the smoke task is the only place the model is
@@ -282,7 +283,7 @@ jobs:
       - name: CI env file (kept outside the entry)
         working-directory: comp
         env:
-          MODEL_KEY: ${{ github.event.inputs.use_alt_key == 'true' && secrets.PLE_MODEL_API_KEY_ALT || secrets.PLE_MODEL_API_KEY }}
+          MODEL_KEY: ${{ github.event.inputs.use_alt_key == 'groq' && secrets.PLE_MODEL_API_KEY_GROQ || (github.event.inputs.use_alt_key == 'true' && secrets.PLE_MODEL_API_KEY_ALT || secrets.PLE_MODEL_API_KEY) }}
           HF: ${{ secrets.HF_TOKEN }}
           BASE_OVERRIDE: ${{ github.event.inputs.model_base_url }}
           VARS_BASE: ${{ vars.PLE_MODEL_BASE_URL }}

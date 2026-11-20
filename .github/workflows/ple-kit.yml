@@ -301,9 +301,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ple-run-${{ github.run_id }}
+          # everything textual under the run dir: results.json, harbor.log,
+          # agent/serve.log, <entry>.txt, trajectory.json, per-task files list.
+          # Binaries and docker layers are skipped (they are gigabytes).
           path: |
-            comp/runs/**/results.json
-            comp/runs/**/final_message.md
-            comp/runs/**/attempt*/harbor.log
+            comp/runs/**/*.json
+            comp/runs/**/*.log
+            comp/runs/**/*.txt
+            comp/runs/**/*.md
+            comp/runs/**/*.yaml
+            comp/runs/**/*.csv
           retention-days: 14
           if-no-files-found: warn
